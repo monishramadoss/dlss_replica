@@ -1,54 +1,44 @@
 import tensorflow as tf
+from tensorboard.plugins.hparams import api as hp
 import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt
 import numpy as np
+import datetime
 import math
 from model import dlss_autoencoder
+import utils
+import os
 
-TILESIZE = 8
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
+
+EPOCHS = 100
+TILESIZE = 256
 SCALING = 2
 BATCHSIZE = 32
 
-tf.enable_eager_execution()
 
-dataset_builder = tfds.builder("cifar10")
-dataset_builder.download_and_prepare()
-train = dataset_builder.as_dataset(split=tfds.Split.TRAIN)
-test = dataset_builder.as_dataset(split=tfds.Split.TEST)
-test_data = list()
-train_data = list()
+if(__name__ == '__main__'):
+    
+    tf.compat.v1.enable_eager_execution()
 
+    dataset_builder = tfds.image.CycleGAN()
+    dataset_builder.download_and_prepare()
+    data = dataset_builder.as_dataset()
 
-for x in test:
-    test_data.append(x['image'])
-for x in train:
-    train_data.append(x['image'])
+    train, test = utils.preProcess(data)
 
-test = tf.extract_image_patches(test_data, ksizes=[1, TILESIZE, TILESIZE, 1], strides=[1, TILESIZE, TILESIZE, 1], rates=[1,1,1,1], padding='SAME')
-test = tf.reshape(test, (-1, TILESIZE, TILESIZE, 3))
-y_test = test
-x_test = tf.image.resize(test, (TILESIZE//SCALING, TILESIZE//SCALING))
+    train = tf.convert_to_tensor(train, dtype=tf.float32)
+    test = tf.convert_to_tensor(test, dtype=tf.float32)
+
+    y = train
+    X = tf.image.resize(train, (TILESIZE//SCALING, TILESIZE//SCALING))
 
 
-train = tf.extract_image_patches(train_data, ksizes=[1, TILESIZE, TILESIZE, 1], strides=[1, TILESIZE, TILESIZE, 1], rates=[1,1,1,1], padding='SAME')
-train = tf.reshape(train, (-1, TILESIZE, TILESIZE, 3))
-y = train
-X = tf.image.resize(train, (TILESIZE//SCALING, TILESIZE//SCALING))
+    dlss = dlss_autoencoder(SCALING)
+    dlss.reset_hidden(y[0])
 
-
-
-optimizer = tf.train.AdamOptimizer()
-loss_history = list()
-logits = list()
-dlss = dlss_autoencoder(SCALING)
-dlss.reset_hidden(X[0])
-
-for i, image in enumerate(X):
-    with tf.GradientTape() as tape:
-        logit = dlss(image)
-        loss_value = tf.losses.mean_squared_error(y[i], logit)
-    loss_history.append(loss_value.numpy())
-    grads = tape.gradient(loss_value, dlss_autoencoder.trainable_variables)
-    optimizer.apply_gradients(zip(grads, dlss_autoencoder.trainable_variables), global_step=tf.train.get_or_create_global_step())
-
-
+    dlss.compile(optimizer='adam', loss='mean_squared_error', metrics=['mean_squared_error'])
+    logdir = os.path.join("logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
+    dlss.fit(X, y, batch_size=BATCHSIZE, epochs=EPOCHS, callbacks=[tensorboard_callback])
+ 

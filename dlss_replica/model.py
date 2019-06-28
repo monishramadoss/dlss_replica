@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+from tensorflow.contrib import rnn
 
 
 class dlss_RCNN_Cell(tf.keras.Model):
@@ -10,29 +10,29 @@ class dlss_RCNN_Cell(tf.keras.Model):
         self.hidden = None
         if(type_op == 'downsample' or type_op == 'bottleneck'):
             self.l1 = tf.keras.Sequential([
-                                            tf.keras.layers.Convolution2D(input_channel, (3,3), (1,1)),
+                                            tf.keras.layers.Convolution2D(input_channel, (3,3), (1,1), 'same'),
                                             tf.keras.layers.LeakyReLU(alpha=0.1)
                                           ])
            
             self.l2 = tf.keras.Sequential([ 
-                                            tf.keras.layers.Convolution2D(output_channel * 2, (3,3), (1,1)),
+                                            tf.keras.layers.Convolution2D(output_channel , (3,3), (1,1), 'same'),
                                             tf.keras.layers.LeakyReLU(alpha=0.1),
-                                            tf.keras.layers.Convolution2D(output_channel, (3,3), (1,1)),
+                                            tf.keras.layers.Convolution2D(output_channel, (3,3), (1,1), 'same'),
                                             tf.keras.layers.LeakyReLU(alpha=0.1)
                                           ])
         if(type_op == 'upsample'):
             self.l1 = tf.keras.Sequential([
                                             tf.keras.layers.UpSampling2D(size=(SCALING, SCALING), interpolation='nearest'),
-                                            tf.keras.layers.Convolution2D(input_channel*2, (3,3), (1,1)),
+                                            tf.keras.layers.Convolution2D(input_channel , (3,3), (1,1), 'same'),
                                             tf.keras.layers.LeakyReLU(alpha=0.1),
-                                            tf.keras.layers.Convolution2D(output_channel, (3,3), (1,1)),
+                                            tf.keras.layers.Convolution2D(output_channel, (3,3), (1,1), 'same'),
                                             tf.keras.layers.LeakyReLU(alpha=0.1)
                                           ])
             
     def call(self, input):
         if(self.type_op == 'downsample' or self.type_op == 'bottleneck'):
             op1 = self.l1(input)
-            op2 = self.l2(tf.concat(input, self.hidden), axis=1)
+            op2 = self.l2(tf.concat([op1, self.hidden], axis=3))
             self.hidden = op2
             return op2
         if(self.type_op == 'upsample'):
@@ -45,14 +45,14 @@ class dlss_RCNN_Cell(tf.keras.Model):
         size[2] = self.output_channel
 
         self.hidden_size = size
-        self.hidden = tf.zeros((size[0], size[1], size[2]))
+        self.hidden = tf.zeros((1, size[0], size[1], size[2]), dtype=tf.float32)
         print(self.hidden.shape)
 
 
 class dlss_autoencoder(tf.keras.Model):
     def __init__(self, SCALING):
         super(dlss_autoencoder, self).__init__()
-        
+        self.upsample = tf.keras.layers.UpSampling2D(size = (SCALING, SCALING), interpolation = "nearest")
         self.pool = tf.keras.layers.MaxPool2D()
 
         self.d_cell1 = dlss_RCNN_Cell(3, 32, 'downsample', SCALING)
@@ -71,7 +71,8 @@ class dlss_autoencoder(tf.keras.Model):
    
 
     def call(self, input):
-        d1 = self.pool(self.d_cell1(input))
+        d0 = self.upsample(input)
+        d1 = self.pool(self.d_cell1(d0))
         d2 = self.pool(self.d_cell2(d1))
         d3 = self.pool(self.d_cell3(d2))
         d4 = self.pool(self.d_cell4(d3))
@@ -79,11 +80,11 @@ class dlss_autoencoder(tf.keras.Model):
 
         b = self.bottle_cell6(d5)
 
-        u5 = self.u_cell7(tf.concat((b, d5), axis=1))
-        u4 = self.u_cell8(tf.concat((u5, d5), axis=1))
-        u3 = self.u_cell9(tf.concat((u4, d5), axis=1))
-        u2 = self.u_cell10(tf.concat((u3, d5), axis=1))
-        output = self.u_cell11(tf.concat((u2, d5), axis=1))
+        u5 = self.u_cell7(tf.concat((b, d5), axis=3))
+        u4 = self.u_cell8(tf.concat((u5, d4), axis=3))
+        u3 = self.u_cell9(tf.concat((u4, d3), axis=3))
+        u2 = self.u_cell10(tf.concat((u3, d2), axis=3))
+        output = self.u_cell11(tf.concat((u2, d1), axis=3))
 
         return output
 
